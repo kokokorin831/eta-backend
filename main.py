@@ -126,7 +126,7 @@ def get_student_context(student_id: str) -> str:
     if not student:
         return "Student not found."
     s = student[0]
-        uuid = s["id"]
+    uuid = s["id"]
     grades = sb.table("grades_scores").select("*").eq("student_id", uuid).execute().data
     apps = sb.table("applications").select("*").eq("student_id", uuid).execute().data
     context = f"Student: {s.get('name_en','')} ({s.get('name_zh','')})\n"
