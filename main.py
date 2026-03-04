@@ -35,6 +35,21 @@ def get_llm_client():
     if HAS_GEMINI and GEMINI_API_KEY:
         return google_genai.Client(api_key=GEMINI_API_KEY)
     return None
+
+# --- Load Skill Files ---
+SKILLS_DIR = os.path.join(os.path.dirname(__file__), "skills")
+
+def load_skill(agent_name: str) -> str:
+    skill_path = os.path.join(SKILLS_DIR, f"{agent_name}_skill.md")
+    try:
+        with open(skill_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return f"You are the {agent_name.replace('_', ' ').title()} agent for the ETA JUPAS Admissions Advisory System."
+
+AGENT_NAMES = ["lead_strategist", "case_manager", "academic_mentor", "essay_coach", "interview_coach", "research_analyst"]
+AGENT_INSTRUCTIONS = {name: load_skill(name) for name in AGENT_NAMES}
+
 # --- Pydantic Models ---
 class ChatMessage(BaseModel):
     student_id: str
@@ -107,18 +122,10 @@ def update_agent_state(agent_name: str, student_id: str, last_action: str, extra
         sb.table("agent_state").update({"state": json.dumps(state), "last_action": last_action, "last_active": datetime.utcnow().isoformat()}).eq("id", existing[0]["id"]).execute()
     else:
         sb.table("agent_state").insert({"agent_name": agent_name, "student_id": student_uuid, "state": json.dumps(state), "last_action": last_action}).execute()
+
 # ============================================
 # 6 AGENTS
 # ============================================
-AGENT_INSTRUCTIONS = {
-    "lead_strategist": "You are the Lead Strategist agent for a Hong Kong JUPAS university admissions system. You help students with university selection strategy, analyzing their DSE scores against programme requirements, and optimizing their Band A/B/C choices. Always consider the student's scores, target band, and programme competitiveness.",
-    "case_manager": "You are the Case Manager agent. You track student progress, manage deadlines, send reminders, and coordinate between other agents. Provide concise status updates and action items.",
-    "academic_mentor": "You are the Academic Mentor agent. You advise students on extracurricular activities, academic enrichment, competitions, and experiences that strengthen university applications.",
-    "essay_coach": "You are the Essay Coach agent. You help students write and refine personal statements and supplementary essays for university applications. Provide specific, actionable feedback.",
-    "interview_coach": "You are the Interview Coach agent. You prepare students for university admission interviews with mock questions, feedback on answers, and tips for specific programmes.",
-    "research_analyst": "You are the Research Analyst agent. You analyze admission statistics, calculate acceptance probabilities, and provide data-driven insights about programme competitiveness."
-}
-
 def get_student_context(student_id: str) -> str:
     sb = get_sb()
     student = sb.table("students").select("*").eq("student_id", student_id).execute().data
@@ -148,6 +155,7 @@ def run_agent(agent_name: str, student_id: str, user_message: str) -> str:
     update_agent_state(agent_name, student_id, f"Responded to: {user_message[:50]}")
     log_message(student_id, "assistant", response, agent_name)
     return response
+
 # ============================================
 # ORCHESTRATOR
 # ============================================
@@ -176,12 +184,13 @@ def orchestrate(student_id: str, message: str) -> dict:
     agent_name = route_message(message)
     response = run_agent(agent_name, student_id, message)
     return {"agent": agent_name, "response": response, "student_id": student_id}
+
 # ============================================
 # API ROUTES
 # ============================================
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "ETA Multi-Agent Backend v2.0"}
+    return {"status": "ok", "message": "ETA Multi-Agent Backend v2.1", "skills_loaded": list(AGENT_INSTRUCTIONS.keys())}
 
 @app.get("/health")
 def health():
@@ -192,11 +201,13 @@ def health():
         sb_ok = True
     except:
         pass
+    skills_loaded = {name: len(content) > 100 for name, content in AGENT_INSTRUCTIONS.items()}
     return {
         "status": "ok",
         "supabase_connected": sb_ok,
         "gemini_configured": bool(GEMINI_API_KEY),
-        "version": "2.0"
+        "skills_loaded": skills_loaded,
+        "version": "2.1"
     }
 
 # --- Chat (Orchestrator entry) ---
@@ -321,7 +332,7 @@ def list_agents():
     for s in states:
         name = s["agent_name"]
         if name not in agent_map:
-            agent_map[name] = {"id": name, "name": name.replace("_", " ").title(), "status": "running", "students_served": 0, "last_action": s.get("last_action", ""), "last_active": s.get("last_active", "")}
+            agent_map[name] = {"id": name, "name": name.replace("_", " ").title(), "status": "running", "students_served": 0, "last_action": s.get("last_action", ""), "last_active": s.get("last_active", ""), "skill_loaded": name in AGENT_INSTRUCTIONS and len(AGENT_INSTRUCTIONS.get(name, "")) > 100}
         agent_map[name]["students_served"] += 1
     all_agents = ["lead_strategist", "case_manager", "academic_mentor", "essay_coach", "interview_coach", "research_analyst"]
     result = []
@@ -329,7 +340,7 @@ def list_agents():
         if a in agent_map:
             result.append(agent_map[a])
         else:
-            result.append({"id": a, "name": a.replace("_", " ").title(), "status": "idle", "students_served": 0, "last_action": "", "last_active": ""})
+            result.append({"id": a, "name": a.replace("_", " ").title(), "status": "idle", "students_served": 0, "last_action": "", "last_active": "", "skill_loaded": a in AGENT_INSTRUCTIONS and len(AGENT_INSTRUCTIONS.get(a, "")) > 100})
     return result
 
 # --- Logs ---
