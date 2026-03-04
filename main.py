@@ -122,7 +122,7 @@ AGENT_INSTRUCTIONS = {
 
 def get_student_context(student_id: str) -> str:
     sb = get_sb()
-    student = sb.table("students").select("*").eq("id", student_id).execute().data
+    student = sb.table("students").select("*").eq"student_id"", student_id).execute().data
     if not student:
         return "Student not found."
     s = student[0]
