@@ -80,7 +80,7 @@ def resolve_student_uuid(student_id_code: str) -> str:
 
 def log_message(student_id: str, role: str, content: str, agent: str = None):
     db_insert("message_log", {
-                "student_id": resolve_student_uuid(student_id),
+        "student_id": resolve_student_uuid(student_id),
         "role": role,
         "content": content,
         "agent": agent,
@@ -100,12 +100,13 @@ def call_llm(prompt: str, system_instruction: str = "") -> str:
 
 def update_agent_state(agent_name: str, student_id: str, last_action: str, extra_state: dict = None):
     sb = get_sb()
+    student_uuid = resolve_student_uuid(student_id)
     state = extra_state or {}
-    existing = sb.table("agent_state").select("id").eq("agent_name", agent_name).eq("student_id", student_id).execute().data
+    existing = sb.table("agent_state").select("id").eq("agent_name", agent_name).eq("student_id", student_uuid).execute().data
     if existing:
         sb.table("agent_state").update({"state": json.dumps(state), "last_action": last_action, "last_active": datetime.utcnow().isoformat()}).eq("id", existing[0]["id"]).execute()
     else:
-        sb.table("agent_state").insert({"agent_name": agent_name, "student_id": student_id, "state": json.dumps(state), "last_action": last_action}).execute()
+        sb.table("agent_state").insert({"agent_name": agent_name, "student_id": student_uuid, "state": json.dumps(state), "last_action": last_action}).execute()
 
 # ============================================
 # 6 AGENTS
@@ -213,15 +214,14 @@ def chat_send(msg: ChatMessage):
 @app.get("/api/chat/history")
 def chat_history(student_id: str, limit: int = 50):
     sb = get_sb()
-    data = sb.table("message_log").select("*").eq("student_id", student_id).order("created_at", desc=False).limit(limit).execute().data
+    student_uuid = resolve_student_uuid(student_id)
+    data = sb.table("message_log").select("*").eq("student_id", student_uuid).order("created_at", desc=False).limit(limit).execute().data
     return data
 
 # --- Dashboard ---
 @app.get("/api/dashboard/students")
 def dashboard_students():
-    sb = get_sb()
-    data = sb.rpc("v_student_dashboard", {}).execute().data if False else db_query("students")
-    return data
+    return db_query("students")
 
 @app.get("/api/dashboard/stats")
 def dashboard_stats():
@@ -247,22 +247,26 @@ def list_students():
 @app.get("/api/students/{student_id}")
 def get_student(student_id: str):
     sb = get_sb()
-    data = sb.table("students").select("*").eq("id", student_id).execute().data
+    data = sb.table("students").select("*").eq("student_id", student_id).execute().data
+    if not data:
+        data = sb.table("students").select("*").eq("id", student_id).execute().data
     if not data:
         raise HTTPException(404, "Student not found")
     student = data[0]
-    student["grades"] = db_query("grades_scores", {"student_id": student_id})
-    student["applications"] = db_query("applications", {"student_id": student_id})
-    student["essays"] = db_query("essay_drafts", {"student_id": student_id})
-    student["interviews"] = db_query("interview_sessions", {"student_id": student_id})
-    student["tasks"] = db_query("task_registry", {"student_id": student_id})
+    uuid = student["id"]
+    student["grades"] = db_query("grades_scores", {"student_id": uuid})
+    student["applications"] = db_query("applications", {"student_id": uuid})
+    student["essays"] = db_query("essay_drafts", {"student_id": uuid})
+    student["interviews"] = db_query("interview_sessions", {"student_id": uuid})
+    student["tasks"] = db_query("task_registry", {"student_id": uuid})
     return student
 
 # --- Applications ---
 @app.get("/api/applications")
 def list_applications(student_id: str = None):
     if student_id:
-        return db_query("applications", {"student_id": student_id})
+        uuid = resolve_student_uuid(student_id)
+        return db_query("applications", {"student_id": uuid})
     return db_query("applications")
 
 # --- Tasks ---
@@ -277,14 +281,17 @@ def list_tasks(student_id: str = None, status: str = None):
     sb = get_sb()
     q = sb.table("task_registry").select("*")
     if student_id:
-        q = q.eq("student_id", student_id)
+        uuid = resolve_student_uuid(student_id)
+        q = q.eq("student_id", uuid)
     if status:
         q = q.eq("status", status)
     return q.order("created_at", desc=True).execute().data
 
 @app.post("/api/tasks")
 def create_task(task: TaskCreate):
-    return db_insert("task_registry", task.dict())
+    data = task.dict()
+    data["student_id"] = resolve_student_uuid(data["student_id"])
+    return db_insert("task_registry", data)
 
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: str, status: str):
@@ -300,8 +307,9 @@ def generate_report(req: ReportGenerate):
     context = get_student_context(req.student_id)
     prompt = f"Generate a comprehensive JUPAS admissions report for this student. Include strategy analysis, probability assessment, and recommended actions.\n\n{context}"
     report_content = call_llm(prompt, "You are an expert JUPAS admissions analyst. Generate a detailed student report.")
+    student_uuid = resolve_student_uuid(req.student_id)
     report = db_insert("report_snapshots", {
-        "student_id": req.student_id,
+        "student_id": student_uuid,
         "report_type": "jupas_analysis",
         "title": f"JUPAS Analysis - {datetime.utcnow().strftime('%Y-%m-%d')}",
         "content": {"text": report_content},
