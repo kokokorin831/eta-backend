@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 
 try:
-    import google.generativeai as genai
+    from google import genai as google_genai
     HAS_GEMINI = True
 except ImportError:
     HAS_GEMINI = False
@@ -31,12 +31,10 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 def get_sb() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def get_llm():
+def get_llm_client():
     if HAS_GEMINI and GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-        return genai.GenerativeModel("gemini-1.5-flash")
+        return google_genai.Client(api_key=GEMINI_API_KEY)
     return None
-
 # --- Pydantic Models ---
 class ChatMessage(BaseModel):
     student_id: str
@@ -55,7 +53,6 @@ class ReportGenerate(BaseModel):
 # ============================================
 # SHARED LAYER
 # ============================================
-
 def db_query(table: str, filters: dict = None, limit: int = 100):
     sb = get_sb()
     q = sb.table(table).select("*")
@@ -88,12 +85,15 @@ def log_message(student_id: str, role: str, content: str, agent: str = None):
     })
 
 def call_llm(prompt: str, system_instruction: str = "") -> str:
-    model = get_llm()
-    if not model:
+    client = get_llm_client()
+    if not client:
         return "[LLM not configured - set GEMINI_API_KEY]"
     try:
         full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
-        response = model.generate_content(full_prompt)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=full_prompt
+        )
         return response.text
     except Exception as e:
         return f"[LLM Error: {str(e)}]"
@@ -107,11 +107,9 @@ def update_agent_state(agent_name: str, student_id: str, last_action: str, extra
         sb.table("agent_state").update({"state": json.dumps(state), "last_action": last_action, "last_active": datetime.utcnow().isoformat()}).eq("id", existing[0]["id"]).execute()
     else:
         sb.table("agent_state").insert({"agent_name": agent_name, "student_id": student_uuid, "state": json.dumps(state), "last_action": last_action}).execute()
-
 # ============================================
 # 6 AGENTS
 # ============================================
-
 AGENT_INSTRUCTIONS = {
     "lead_strategist": "You are the Lead Strategist agent for a Hong Kong JUPAS university admissions system. You help students with university selection strategy, analyzing their DSE scores against programme requirements, and optimizing their Band A/B/C choices. Always consider the student's scores, target band, and programme competitiveness.",
     "case_manager": "You are the Case Manager agent. You track student progress, manage deadlines, send reminders, and coordinate between other agents. Provide concise status updates and action items.",
@@ -150,11 +148,9 @@ def run_agent(agent_name: str, student_id: str, user_message: str) -> str:
     update_agent_state(agent_name, student_id, f"Responded to: {user_message[:50]}")
     log_message(student_id, "assistant", response, agent_name)
     return response
-
 # ============================================
 # ORCHESTRATOR
 # ============================================
-
 ROUTING_KEYWORDS = {
     "lead_strategist": ["strategy", "choice", "band", "jupas", "select", "university", "programme", "rank", "priority"],
     "case_manager": ["deadline", "progress", "status", "remind", "schedule", "update", "when", "timeline"],
@@ -180,11 +176,9 @@ def orchestrate(student_id: str, message: str) -> dict:
     agent_name = route_message(message)
     response = run_agent(agent_name, student_id, message)
     return {"agent": agent_name, "response": response, "student_id": student_id}
-
 # ============================================
 # API ROUTES
 # ============================================
-
 @app.get("/")
 def root():
     return {"status": "ok", "message": "ETA Multi-Agent Backend v2.0"}
