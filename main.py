@@ -34,7 +34,7 @@ def get_sb() -> Client:
 def get_llm():
     if HAS_GEMINI and GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
-        return genai.GenerativeModel("gemini-2.0-flash")
+        return genai.GenerativeModel("gemini-1.5-flash")
     return None
 
 # --- Pydantic Models ---
