@@ -72,9 +72,15 @@ def db_update(table: str, id_val: str, data: dict):
     sb = get_sb()
     return sb.table(table).update(data).eq("id", id_val).execute().data
 
+def resolve_student_uuid(student_id_code: str) -> str:
+    rows = db_query("students", {"student_id": student_id_code}, limit=1)
+    if rows:
+        return rows[0]["id"]
+    return student_id_code
+
 def log_message(student_id: str, role: str, content: str, agent: str = None):
     db_insert("message_log", {
-        "student_id": student_id,
+                "student_id": resolve_student_uuid(student_id),
         "role": role,
         "content": content,
         "agent": agent,
