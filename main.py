@@ -755,3 +755,105 @@ def chat_agent_direct(msg: DirectAgentChat):
 def get_agent_roles():
     """Return agent roles info for frontend agent selector"""
     return AGENT_ROLES
+
+# ============================================
+# ENHANCED ORCHESTRATOR v4.0
+# - Chat history for conversation continuity
+# - Proactive /api/chat/init endpoint
+# - Better inter-agent referencing
+# ============================================
+
+def get_chat_history(student_id: str, limit: int = 10) -> str:
+    """Fetch recent chat history for conversation continuity"""
+    sb = get_sb()
+    student_uuid = resolve_student_uuid(student_id)
+    messages = sb.table("message_log").select("role, agent, content, created_at").eq("student_id", student_uuid).order("created_at", desc=True).limit(limit).execute().data
+    if not messages:
+        return ""
+    messages.reverse()
+    history = "Recent conversation history:\n"
+    for m in messages:
+        if m["role"] == "user":
+            history += f"[Student]: {m['content'][:150]}\n"
+        else:
+            agent_label = (m.get('agent') or 'advisor').replace('_', ' ').title()
+            history += f"[{agent_label}]: {m['content'][:150]}\n"
+    return history
+
+# Override run_agent to include chat history
+_original_run_agent = run_agent
+
+def run_agent(agent_name: str, student_id: str, user_message: str, prev_context: str = "") -> str:
+    instruction = GROUP_CHAT_RULES + AGENT_INSTRUCTIONS.get(agent_name, "You are a helpful education advisor.")
+    context = get_student_context(student_id)
+    chat_history = get_chat_history(student_id)
+    prompt = f"Student Context:\n{context}\n"
+    if chat_history:
+        prompt += f"\n{chat_history}\n"
+    if prev_context:
+        prompt += f"Previous advisor responses in this round:\n{prev_context}\n\n"
+        prompt += "IMPORTANT: Reference what the previous advisors said. Agree, disagree, or add new info. Use @AgentName to tag them.\n\n"
+    prompt += f"Student Question: {user_message}"
+    response = call_llm(prompt, instruction)
+    update_agent_state(agent_name, student_id, f"Responded to: {user_message[:50]}")
+    log_message(student_id, "assistant", response, agent_name)
+    return response
+
+# ============================================
+# PROACTIVE CHAT INIT ENDPOINT
+# ============================================
+
+class ChatInit(BaseModel):
+    student_id: str
+
+@app.post("/api/chat/init")
+def chat_init(req: ChatInit):
+    """Proactive team briefing when student enters chat.
+    Lead Strategist gives overview, Case Manager lists action items."""
+    context = get_student_context(req.student_id)
+    if context == "Student not found.":
+        raise HTTPException(404, "Student not found")
+
+    # Lead Strategist opens with strategic overview
+    ls_instruction = GROUP_CHAT_RULES + AGENT_INSTRUCTIONS.get("lead_strategist", "")
+    ls_prompt = f"Student Context:\n{context}\n\nYou are opening a team advisory session. Give a brief strategic overview of this student's situation. Highlight key strengths, risks, and 1-2 priority actions. Keep it under 60 words. Address the student directly."
+    ls_response = call_llm(ls_prompt, ls_instruction)
+    log_message(req.student_id, "assistant", ls_response, "lead_strategist")
+    update_agent_state("lead_strategist", req.student_id, "Init briefing")
+
+    # Case Manager follows with action items
+    cm_instruction = GROUP_CHAT_RULES + AGENT_INSTRUCTIONS.get("case_manager", "")
+    cm_prompt = f"Student Context:\n{context}\n\nPrevious advisor responses:\n[Lead Strategist]: {ls_response}\n\n@Lead Strategist just gave the overview. Now list 2-3 urgent action items with deadlines for this student. Keep it under 60 words. Be specific with dates."
+    cm_response = call_llm(cm_prompt, cm_instruction)
+    log_message(req.student_id, "assistant", cm_response, "case_manager")
+    update_agent_state("case_manager", req.student_id, "Init action items")
+
+    ls_role = AGENT_ROLES["lead_strategist"]
+    cm_role = AGENT_ROLES["case_manager"]
+
+    responses = [
+        {
+            "agent": "lead_strategist",
+            "agentName": ls_role["name"],
+            "agentNameZh": ls_role["name_zh"],
+            "icon": ls_role["icon"],
+            "color": ls_role["color"],
+            "content": ls_response
+        },
+        {
+            "agent": "case_manager",
+            "agentName": cm_role["name"],
+            "agentNameZh": cm_role["name_zh"],
+            "icon": cm_role["icon"],
+            "color": cm_role["color"],
+            "content": cm_response
+        }
+    ]
+
+    return {
+        "student_id": req.student_id,
+        "plan": {"agents": ["lead_strategist", "case_manager"], "sequence": "init", "reason": "proactive team briefing"},
+        "responses": responses,
+        "agent": "lead_strategist",
+        "response": ls_response
+    }
