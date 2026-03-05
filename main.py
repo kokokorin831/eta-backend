@@ -104,19 +104,19 @@ def call_llm(prompt: str, system_instruction: str = "") -> str:
     if not client:
         return "[LLM not configured - set GEMINI_API_KEY]"
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash-001"]
-        full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
-        last_error = None
-        for model_name in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=full_prompt
-                )
-                return response.text
-            except Exception as e:
-                last_error = e
-                continue
-        return f"[LLM Error: {str(last_error)}]"
+    full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=full_prompt
+            )
+            return response.text
+        except Exception as e:
+            last_error = e
+            continue
+    return f"[LLM Error: {str(last_error)}]"
 
 def update_agent_state(agent_name: str, student_id: str, last_action: str, extra_state: dict = None):
     sb = get_sb()
