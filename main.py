@@ -392,3 +392,103 @@ def update_config(key: str, value: dict):
     if existing:
         return sb.table("system_config").update({"value": json.dumps(value), "updated_at": datetime.utcnow().isoformat()}).eq("key", key).execute().data
     return db_insert("system_config", {"key": key, "value": json.dumps(value)})
+
+# ---- Programmes (JUPAS + Global) ----
+@app.get("/api/programmes/hk")
+def list_programmes_hk(university: str = None, band: str = None, search: str = None, limit: int = 100):
+    sb = get_sb()
+    q = sb.table("programmes_hk").select("*")
+    if university:
+        q = q.ilike("university_name", f"%{university}%")
+    if band:
+        q = q.eq("band", band)
+    if search:
+        q = q.or_(f"programme_name.ilike.%{search}%,jupas_code.ilike.%{search}%")
+    return q.order("university_name").limit(limit).execute().data
+
+@app.get("/api/programmes/hk/{jupas_code}")
+def get_programme_hk(jupas_code: str):
+    sb = get_sb()
+    data = sb.table("programmes_hk").select("*").eq("jupas_code", jupas_code).execute().data
+    if not data:
+        raise HTTPException(404, "Programme not found")
+    return data[0]
+
+@app.get("/api/programmes/hk/university/{uni_name}")
+def programmes_by_university(uni_name: str):
+    sb = get_sb()
+    return sb.table("programmes_hk").select("*").ilike("university_name", f"%{uni_name}%").order("jupas_code").execute().data
+
+@app.get("/api/programmes/hk/stats")
+def programmes_hk_stats():
+    sb = get_sb()
+    all_progs = sb.table("programmes_hk").select("university_name, median_score, lq_score").execute().data
+    unis = {}
+    for p in all_progs:
+        uni = p["university_name"]
+        if uni not in unis:
+            unis[uni] = 0
+        unis[uni] += 1
+    return {
+        "total_programmes": len(all_progs),
+        "universities": len(unis),
+        "by_university": unis
+    }
+
+@app.get("/api/programmes/match")
+def match_programmes(student_id: str, limit: int = 10):
+    """Match programmes to a student based on their scores"""
+    sb = get_sb()
+    student = sb.table("students").select("*").eq("student_id", student_id).execute().data
+    if not student:
+        student = sb.table("students").select("*").eq("id", student_id).execute().data
+    if not student:
+        raise HTTPException(404, "Student not found")
+    s = student[0]
+    uuid = s["id"]
+    grades = sb.table("grades_scores").select("*").eq("student_id", uuid).execute().data
+    total_score = sum(g.get("score", 0) or 0 for g in grades)
+    progs = sb.table("programmes_hk").select("jupas_code, university_name, programme_name, median_score, lq_score, uq_score").execute().data
+    matches = []
+    for p in progs:
+        median = p.get("median_score") or 0
+        lq = p.get("lq_score") or 0
+        if median > 0:
+            if total_score >= median:
+                chance = 80
+            elif total_score >= lq:
+                chance = 50
+            else:
+                chance = max(10, int(100 * total_score / median) - 20)
+        else:
+            chance = 0
+        matches.append({**p, "chance": chance, "student_score": total_score})
+    matches.sort(key=lambda x: -x["chance"])
+    return matches[:limit]
+
+@app.get("/api/programmes/search")
+def search_programmes_global(q: str, region: str = None, limit: int = 50):
+    sb = get_sb()
+    tables_map = {
+        "hk": "programmes_hk",
+        "uk": "programmes_uk",
+        "us": "programmes_us",
+        "au": "programmes_au",
+        "sg": "programmes_sg",
+        "eu": "programmes_eu",
+        "jp": "programmes_jp",
+        "kr": "programmes_kr",
+        "ca": "programmes_ca",
+        "mainland": "programmes_mainland",
+    }
+    results = []
+    search_tables = {region: tables_map[region]} if region and region in tables_map else tables_map
+    for reg, table in search_tables.items():
+        try:
+            data = sb.table(table).select("*").or_(f"programme_name.ilike.%{q}%,university_name.ilike.%{q}%").limit(limit).execute().data
+            for d in data:
+                d["region"] = reg
+            results.extend(data)
+        except:
+            pass
+    return results[:limit]
