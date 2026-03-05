@@ -305,24 +305,52 @@ def update_task(task_id: str, status: str):
 # --- Reports ---
 @app.get("/api/reports")
 def list_reports():
-    return db_query("report_snapshots")
+    sb = get_sb()
+    reports = sb.table("eta_reports").select("*").order("created_at", desc=True).execute().data
+    result = []
+    for r in reports:
+        student = sb.table("students").select("student_id, name_en, school, target_band").eq("student_id", r.get("student_id", "")).execute().data
+        s = student[0] if student else {}
+        apps = sb.table("applications").select("university, programme").eq("student_id", s.get("id", "")).limit(3).execute().data if student else []
+        top_matches = [{"university": a["university"], "programme": a["programme"], "chance": 70} for a in apps]
+        band_val = s.get("target_band", "A")
+        band_num = 1 if band_val in ["A", "1"] else (2 if band_val in ["B", "2"] else 3)
+        result.append({
+            "id": r["id"],
+            "studentId": r.get("student_id", ""),
+            "studentName": r.get("student_name", s.get("name_en", "")),
+            "school": s.get("school", ""),
+            "band": band_num,
+            "jupasScore": 0,
+            "topMatches": top_matches,
+            "status": "generated" if r.get("status") == "completed" else "pending",
+            "generatedAt": r.get("completed_at") or r.get("created_at", "")
+        })
+    return result
 
 @app.post("/api/reports/generate")
 def generate_report(req: ReportGenerate):
+    sb = get_sb()
+    # Look up student info
+    student_rows = sb.table("students").select("*").eq("student_id", req.student_id).execute().data
+    if not student_rows:
+        student_rows = sb.table("students").select("*").eq("id", req.student_id).execute().data
+    if not student_rows:
+        raise HTTPException(404, "Student not found")
+    s = student_rows[0]
     context = get_student_context(req.student_id)
     prompt = f"Generate a comprehensive JUPAS admissions report for this student. Include strategy analysis, probability assessment, and recommended actions.\n\n{context}"
     report_content = call_llm(prompt, "You are an expert JUPAS admissions analyst. Generate a detailed student report.")
-    student_uuid = resolve_student_uuid(req.student_id)
-    report = db_insert("report_snapshots", {
-        "student_id": student_uuid,
-        "report_type": "jupas_analysis",
-        "title": f"JUPAS Analysis - {datetime.utcnow().strftime('%Y-%m-%d')}",
-        "content": {"text": report_content},
-        "generated_by": "research_analyst"
+    # Insert into eta_reports
+    report = db_insert("eta_reports", {
+        "student_id": s.get("student_id", req.student_id),
+        "student_name": s.get("name_en", ""),
+        "status": "completed",
+        "completed_at": datetime.utcnow().isoformat()
     })
     update_agent_state("research_analyst", req.student_id, "Generated JUPAS analysis report")
-    return report
-
+    report_id = report[0]["id"] if report else "unknown"
+    return {"success": True, "reportId": report_id}
 # --- Agents status (for dashboard) ---
 @app.get("/api/agents")
 def list_agents():
