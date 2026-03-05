@@ -145,6 +145,26 @@ def get_student_context(student_id: str) -> str:
         context += "Applications:\n"
         for a in apps:
             context += f"  {a['university']} - {a['programme']} ({a.get('jupas_code','')}) Band {a.get('band','')} P{a.get('priority_rank','')} Status:{a.get('status','')}\n"
+                # Add programme matching data
+    try:
+        total_score = sum(g.get("score", 0) or 0 for g in grades)
+        if total_score > 0:
+            progs = sb.table("programmes_hk").select("jupas_code, university_name, programme_name, median_score, lq_score").execute().data
+            matched = []
+            for p in progs:
+                median = p.get("median_score") or 0
+                if median > 0 and total_score >= (p.get("lq_score") or 0):
+                    chance = 80 if total_score >= median else 50
+                    matched.append((p, chance))
+            matched.sort(key=lambda x: -x[1])
+            if matched:
+                context += f"\nJUPAS Score: {total_score}\n"
+                context += "Top Programme Matches (from 416 real JUPAS programmes):\n"
+                for p, chance in matched[:10]:
+                    context += f"  {p['jupas_code']} {p['university_name']} - {p['programme_name']} (Median:{p.get('median_score','N/A')}) Chance:{chance}%\n"
+    except:
+        pass
+
     return context
 
 def run_agent(agent_name: str, student_id: str, user_message: str) -> str:
