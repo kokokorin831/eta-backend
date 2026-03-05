@@ -116,8 +116,7 @@ def call_llm(prompt: str, system_instruction: str = "") -> str:
         except Exception as e:
             last_error = e
             continue
-    return f"[LLM Error: {str(last_error)}]"
-
+    return "⚠️ 抱歉，AI 顧問暫時無法回應。請稍後再試或聯絡管理員。"
 def update_agent_state(agent_name: str, student_id: str, last_action: str, extra_state: dict = None):
     sb = get_sb()
     student_uuid = resolve_student_uuid(student_id)
@@ -408,8 +407,46 @@ def list_logs(level: str = None, agent: str = None, limit: int = 100):
 # --- Config ---
 @app.get("/api/config")
 def get_config():
-    return db_query("system_config")
+    rows = db_query("system_config")
+    row_dict = {r["key"]: r["value"] for r in rows}
+    return {
+        "autoRunAgents": json.loads(row_dict.get("auto_run_agents", "false")),
+        "emailNotifications": json.loads(row_dict.get("email_notifications", "false")),
+        "notificationEmail": row_dict.get("notification_email", ""),
+        "maxConcurrentAgents": int(row_dict.get("max_concurrent_agents", "6")),
+        "logRetentionDays": int(row_dict.get("log_retention_days", "30")),
+        "apiKeys": {"gemini": row_dict.get("api_key_gemini", ""), "whatsapp": row_dict.get("api_key_whatsapp", "")}
+    }
 
+@app.put("/api/config")
+def update_config_bulk(payload: dict):
+    """Update multiple config values at once (frontend SystemConfig shape)"""
+    CONFIG_KEY_MAP = {
+        "autoRunAgents": "auto_run_agents",
+        "emailNotifications": "email_notifications",
+        "notificationEmail": "notification_email",
+        "maxConcurrentAgents": "max_concurrent_agents",
+        "logRetentionDays": "log_retention_days",
+    }
+    sb = get_sb()
+    for frontend_key, db_key in CONFIG_KEY_MAP.items():
+        if frontend_key in payload:
+            value = json.dumps(payload[frontend_key]) if not isinstance(payload[frontend_key], str) else payload[frontend_key]
+            existing = sb.table("system_config").select("key").eq("key", db_key).execute().data
+            if existing:
+                sb.table("system_config").update({"value": value, "updated_at": datetime.utcnow().isoformat()}).eq("key", db_key).execute()
+            else:
+                sb.table("system_config").insert({"key": db_key, "value": value}).execute()
+    # Handle apiKeys separately
+    if "apiKeys" in payload:
+        for k, v in payload["apiKeys"].items():
+            db_key = f"api_key_{k}"
+            existing = sb.table("system_config").select("key").eq("key", db_key).execute().data
+            if existing:
+                sb.table("system_config").update({"value": v, "updated_at": datetime.utcnow().isoformat()}).eq("key", db_key).execute()
+            else:
+                sb.table("system_config").insert({"key": db_key, "value": v}).execute()
+    return {"status": "ok"}
 @app.put("/api/config/{key}")
 def update_config(key: str, value: dict):
     sb = get_sb()
