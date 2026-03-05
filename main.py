@@ -309,7 +309,7 @@ def list_reports():
     reports = sb.table("eta_reports").select("*").order("created_at", desc=True).execute().data
     result = []
     for r in reports:
-        student = sb.table("students").select("student_id, name_en, school, target_band").eq("student_id", r.get("student_id", "")).execute().data
+        student = sb.table("students").select("student_id, name_en, target_band").eq("student_id", r.get("student_id", "")).execute().data
         s = student[0] if student else {}
         apps = sb.table("applications").select("university, programme").eq("student_id", s.get("id", "")).limit(3).execute().data if student else []
         top_matches = [{"university": a["university"], "programme": a["programme"], "chance": 70} for a in apps]
@@ -319,7 +319,7 @@ def list_reports():
             "id": r["id"],
             "studentId": r.get("student_id", ""),
             "studentName": r.get("student_name", s.get("name_en", "")),
-            "school": s.get("school", ""),
+            "school": "",
             "band": band_num,
             "jupasScore": 0,
             "topMatches": top_matches,
