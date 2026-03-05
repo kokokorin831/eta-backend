@@ -171,10 +171,13 @@ def get_student_context(student_id: str) -> str:
 
     return context
 
-def run_agent(agent_name: str, student_id: str, user_message: str) -> str:
+def run_agent(agent_name: str, student_id: str, user_message: str, prev_context: str = "") -> str:
     instruction = AGENT_INSTRUCTIONS.get(agent_name, "You are a helpful education advisor.")
     context = get_student_context(student_id)
-    prompt = f"Student Context:\n{context}\nStudent Question: {user_message}"
+    prompt = f"Student Context:\n{context}\n"
+    if prev_context:
+        prompt += f"Previous advisor responses:\n{prev_context}\n\n"
+    prompt += f"Student Question: {user_message}"
     response = call_llm(prompt, instruction)
     update_agent_state(agent_name, student_id, f"Responded to: {user_message[:50]}")
     log_message(student_id, "assistant", response, agent_name)
@@ -183,6 +186,16 @@ def run_agent(agent_name: str, student_id: str, user_message: str) -> str:
 # ============================================
 # ORCHESTRATOR
 # ============================================
+
+AGENT_ROLES = {
+    "lead_strategist": {"name": "Lead Strategist", "name_zh": "策略專家", "icon": "🎯", "color": "#3B82F6"},
+    "case_manager": {"name": "Case Manager", "name_zh": "個案經理", "icon": "📋", "color": "#10B981"},
+    "academic_mentor": {"name": "Academic Mentor", "name_zh": "學術導師", "icon": "📚", "color": "#8B5CF6"},
+    "essay_coach": {"name": "Essay Coach", "name_zh": "文書教練", "icon": "✍️", "color": "#F59E0B"},
+    "interview_coach": {"name": "Interview Coach", "name_zh": "面試教練", "icon": "🎙️", "color": "#EF4444"},
+    "research_analyst": {"name": "Research Analyst", "name_zh": "研究分析師", "icon": "📊", "color": "#06B6D4"},
+}
+
 ROUTING_KEYWORDS = {
     "lead_strategist": ["strategy", "choice", "band", "jupas", "select", "university", "programme", "rank", "priority"],
     "case_manager": ["deadline", "progress", "status", "remind", "schedule", "update", "when", "timeline"],
@@ -203,18 +216,83 @@ def route_message(message: str) -> str:
         return max(scores, key=scores.get)
     return "case_manager"
 
+def traffic_light_plan(message: str) -> dict:
+    """Case Manager acts as traffic light - decides which agents should participate"""
+    routing_prompt = f"""You are the Case Manager (traffic light) for an education advisory team.
+Analyze the student's question and decide which advisors should respond.
+
+Available advisors:
+- lead_strategist: JUPAS strategy, university selection, band/programme ranking
+- research_analyst: Data analysis, admission statistics, probability calculation
+- academic_mentor: Extracurricular activities, competitions, enrichment
+- essay_coach: Personal statements, essays, writing feedback
+- interview_coach: Interview preparation, mock interviews
+- case_manager: Deadlines, progress tracking, general coordination
+
+Student question: {message}
+
+Respond in JSON format ONLY:
+{{"agents": ["agent1", "agent2"], "sequence": "sequential", "reason": "brief reason"}}
+
+Rules:
+- Select 1-3 agents maximum
+- For strategy questions, pair lead_strategist with research_analyst
+- For essay questions, pair essay_coach with academic_mentor
+- For simple questions, use only 1 agent
+- Always put the most relevant agent first"""
+    try:
+        result = call_llm(routing_prompt)
+        # Extract JSON from response
+        import re
+        json_match = re.search(r'\{{.*?\}}', result, re.DOTALL)
+        if json_match:
+            plan = json.loads(json_match.group())
+            # Validate agents
+            valid_agents = [a for a in plan.get("agents", []) if a in AGENT_NAMES]
+            if valid_agents:
+                return {"agents": valid_agents[:3], "sequence": plan.get("sequence", "sequential"), "reason": plan.get("reason", "")}
+    except:
+        pass
+    # Fallback to keyword routing
+    return {"agents": [route_message(message)], "sequence": "sequential", "reason": "keyword fallback"}
+
 def orchestrate(student_id: str, message: str) -> dict:
+    """Traffic-light orchestrator: Case Manager decides, multiple agents respond"""
     log_message(student_id, "user", message)
-    agent_name = route_message(message)
-    response = run_agent(agent_name, student_id, message)
-    return {"agent": agent_name, "response": response, "student_id": student_id}
+    # Step 1: Case Manager plans which agents participate
+    plan = traffic_light_plan(message)
+    agents_list = plan["agents"]
+    # Step 2: Run agents sequentially, each seeing previous responses
+    responses = []
+    prev_context = ""
+    for agent_name in agents_list:
+        role_info = AGENT_ROLES.get(agent_name, {"name": agent_name.replace('_', ' ').title(), "name_zh": "", "icon": "", "color": "#666"})
+        response_text = run_agent(agent_name, student_id, message, prev_context)
+        responses.append({
+            "agent": agent_name,
+            "agentName": role_info["name"],
+            "agentNameZh": role_info["name_zh"],
+            "icon": role_info["icon"],
+            "color": role_info["color"],
+            "content": response_text
+        })
+        # Build context for next agent
+        prev_context += f"[{role_info['name']}]: {response_text}\n\n"
+    return {
+        "student_id": student_id,
+        "plan": plan,
+        "responses": responses,
+        # Backward compatible: also include single response for existing frontend
+        "agent": agents_list[0] if agents_list else "case_manager",
+        "response": responses[0]["content"] if responses else ""
+    }
 
 # ============================================
 # API ROUTES
 # ============================================
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "ETA Multi-Agent Backend v2.1", "skills_loaded": list(AGENT_INSTRUCTIONS.keys())}
+    return {"status": "ok", "message": "ETA Multi-Agent Backend v3.0 - Multi-Agent Traffic Light", "skills_loaded": list(AGENT_INSTRUCTIONS.keys())}
 
 @app.get("/health")
 def health():
@@ -231,7 +309,7 @@ def health():
         "supabase_connected": sb_ok,
         "gemini_configured": bool(GEMINI_API_KEY),
         "skills_loaded": skills_loaded,
-        "version": "2.1"
+        "version": "3.0"
     }
 
 # --- Chat (Orchestrator entry) ---
