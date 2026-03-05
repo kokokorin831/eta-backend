@@ -50,6 +50,19 @@ def load_skill(agent_name: str) -> str:
 AGENT_NAMES = ["lead_strategist", "case_manager", "academic_mentor", "essay_coach", "interview_coach", "research_analyst"]
 AGENT_INSTRUCTIONS = {name: load_skill(name) for name in AGENT_NAMES}
 
+# --- Group Chat Style Rules ---
+GROUP_CHAT_RULES = (
+    "CRITICAL OUTPUT RULES (override all other formatting instructions):\n"
+    "1. You are in a GROUP CHAT with other advisors. Write like WhatsApp - SHORT and conversational.\n"
+    "2. Maximum 80 words per response. Be concise and direct.\n"
+    "3. DO NOT use Markdown formatting (no ##, no **, no bullet lists, no ---).\n"
+    "4. Use plain text only. For data comparisons, use simple table format with | separators.\n"
+    "5. If another advisor already covered a topic, dont repeat. Add NEW info only.\n"
+    "6. Reference other advisors by name when relevant.\n"
+    "7. End with a brief actionable suggestion or question to the student.\n"
+    "8. Mix English with key Chinese terms natural for HK students.\n"
+)
+
 # --- Pydantic Models ---
 class ChatMessage(BaseModel):
     student_id: str
@@ -172,7 +185,7 @@ def get_student_context(student_id: str) -> str:
     return context
 
 def run_agent(agent_name: str, student_id: str, user_message: str, prev_context: str = "") -> str:
-    instruction = AGENT_INSTRUCTIONS.get(agent_name, "You are a helpful education advisor.")
+    instruction = GROUP_CHAT_RULES + AGENT_INSTRUCTIONS.get(agent_name, "You are a helpful education advisor.")
     context = get_student_context(student_id)
     prompt = f"Student Context:\n{context}\n"
     if prev_context:
