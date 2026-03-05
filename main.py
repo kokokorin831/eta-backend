@@ -311,7 +311,7 @@ def list_reports():
     for r in reports:
         student = sb.table("students").select("student_id, name_en, target_band").eq("student_id", r.get("student_id", "")).execute().data
         s = student[0] if student else {}
-        apps = sb.table("applications").select("university, programme").eq("student_id", s.get("id", "")).limit(3).execute().data if student else []
+        apps = sb.table("applications").select("university, programme").eq("student_id", s.get("id")).limit(3).execute().data if student and s.get("id") else []
         top_matches = [{"university": a["university"], "programme": a["programme"], "chance": 70} for a in apps]
         band_val = s.get("target_band", "A")
         band_num = 1 if band_val in ["A", "1"] else (2 if band_val in ["B", "2"] else 3)
