@@ -492,6 +492,8 @@ def search_programmes_global(q: str, region: str = None, limit: int = 50):
     sb = get_sb()
     tables_map = {
         "hk": "programmes_hk",
+        "hk_nonjupas": "programmes_hk_nonjupas",
+        "hk_selffinanced": "programmes_hk_selffinanced",
         "uk": "programmes_uk",
         "us": "programmes_us",
         "au": "programmes_au",
@@ -501,15 +503,88 @@ def search_programmes_global(q: str, region: str = None, limit: int = 50):
         "kr": "programmes_kr",
         "ca": "programmes_ca",
         "mainland": "programmes_mainland",
+        "macau": "programmes_macau",
+        "nz": "programmes_nz",
+        "asia_other": "programmes_asia_other",
     }
     results = []
     search_tables = {region: tables_map[region]} if region and region in tables_map else tables_map
     for reg, table in search_tables.items():
         try:
-            data = sb.table(table).select("*").or_(f"programme_name.ilike.%{q}%,university_name.ilike.%{q}%").limit(limit).execute().data
-            for d in data:
-                d["region"] = reg
+            if table == "programmes_hk_selffinanced":
+                data = sb.table(table).select("*").or_(f"programme_name_en.ilike.%{q}%,institution.ilike.%{q}%").limit(limit).execute().data
+                for d in data:
+                    d["region"] = reg
+                    d["programme_name"] = d.get("programme_name_en", "")
+                    d["university_name"] = d.get("institution", "")
+            else:
+                data = sb.table(table).select("*").or_(f"programme_name.ilike.%{q}%,university_name.ilike.%{q}%").limit(limit).execute().data
+                for d in data:
+                    d["region"] = reg
             results.extend(data)
         except:
             pass
     return results[:limit]
+
+
+@app.get("/api/programmes/all/stats")
+def all_programmes_stats():
+    sb = get_sb()
+    tables_map = {
+        "hk": "programmes_hk",
+        "hk_nonjupas": "programmes_hk_nonjupas",
+        "hk_selffinanced": "programmes_hk_selffinanced",
+        "uk": "programmes_uk",
+        "us": "programmes_us",
+        "au": "programmes_au",
+        "sg": "programmes_sg",
+        "eu": "programmes_eu",
+        "jp": "programmes_jp",
+        "kr": "programmes_kr",
+        "ca": "programmes_ca",
+        "mainland": "programmes_mainland",
+        "macau": "programmes_macau",
+        "nz": "programmes_nz",
+        "asia_other": "programmes_asia_other",
+    }
+    stats = {}
+    total = 0
+    for region, table in tables_map.items():
+        try:
+            count = len(sb.table(table).select("id").execute().data)
+            stats[region] = count
+            total += count
+        except:
+            stats[region] = 0
+    return {"total_programmes": total, "regions": len(stats), "by_region": stats}
+
+@app.get("/api/programmes/{region}")
+def list_programmes_by_region(region: str, search: str = None, limit: int = 100):
+    tables_map = {
+        "hk": "programmes_hk",
+        "hk_nonjupas": "programmes_hk_nonjupas",
+        "hk_selffinanced": "programmes_hk_selffinanced",
+        "uk": "programmes_uk",
+        "us": "programmes_us",
+        "au": "programmes_au",
+        "sg": "programmes_sg",
+        "eu": "programmes_eu",
+        "jp": "programmes_jp",
+        "kr": "programmes_kr",
+        "ca": "programmes_ca",
+        "mainland": "programmes_mainland",
+        "macau": "programmes_macau",
+        "nz": "programmes_nz",
+        "asia_other": "programmes_asia_other",
+    }
+    if region not in tables_map:
+        raise HTTPException(404, f"Region '{region}' not found. Available: {list(tables_map.keys())}")
+    sb = get_sb()
+    table = tables_map[region]
+    q = sb.table(table).select("*")
+    if search:
+        if table == "programmes_hk_selffinanced":
+            q = q.or_(f"programme_name_en.ilike.%{search}%,institution.ilike.%{search}%")
+        else:
+            q = q.or_(f"programme_name.ilike.%{search}%,university_name.ilike.%{search}%")
+    return q.limit(limit).execute().data
