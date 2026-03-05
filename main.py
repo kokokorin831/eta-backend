@@ -426,14 +426,6 @@ def list_programmes_hk(university: str = None, band: str = None, search: str = N
         q = q.or_(f"programme_name.ilike.%{search}%,jupas_code.ilike.%{search}%")
     return q.order("university_name").limit(limit).execute().data
 
-@app.get("/api/programmes/hk/{jupas_code}")
-def get_programme_hk(jupas_code: str):
-    sb = get_sb()
-    data = sb.table("programmes_hk").select("*").eq("jupas_code", jupas_code).execute().data
-    if not data:
-        raise HTTPException(404, "Programme not found")
-    return data[0]
-
 @app.get("/api/programmes/hk/university/{uni_name}")
 def programmes_by_university(uni_name: str):
     sb = get_sb()
@@ -454,6 +446,15 @@ def programmes_hk_stats():
         "universities": len(unis),
         "by_university": unis
     }
+
+@app.get("/api/programmes/hk/{jupas_code}")
+def get_programme_hk(jupas_code: str):
+    sb = get_sb()
+    data = sb.table("programmes_hk").select("*").eq("jupas_code", jupas_code).execute().data
+    if not data:
+        raise HTTPException(404, "Programme not found")
+    return data[0]
+
 
 @app.get("/api/programmes/match")
 def match_programmes(student_id: str, limit: int = 10):
