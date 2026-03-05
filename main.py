@@ -116,7 +116,7 @@ def call_llm(prompt: str, system_instruction: str = "") -> str:
     client = get_llm_client()
     if not client:
         return "[LLM not configured - set GEMINI_API_KEY]"
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash-001"]
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
     full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
     last_error = None
     for model_name in models_to_try:
@@ -127,7 +127,8 @@ def call_llm(prompt: str, system_instruction: str = "") -> str:
             )
             return response.text
         except Exception as e:
-            last_error = e
+                        last_error = e
+                print(f"LLM Error ({model_name}): {e}")
             continue
     return "⚠️ 抱歉，AI 顧問暫時無法回應。請稍後再試或聯絡管理員。"
 def update_agent_state(agent_name: str, student_id: str, last_action: str, extra_state: dict = None):
@@ -721,3 +722,38 @@ def list_programmes_by_region(region: str, search: str = None, limit: int = 100)
         else:
             q = q.or_(f"programme_name.ilike.%{search}%,university_name.ilike.%{search}%")
     return q.limit(limit).execute().data
+
+# --- Direct Agent Chat (click-to-agent feature) ---
+class DirectAgentChat(BaseModel):
+    student_id: str
+    agent: str
+    message: str
+
+@app.post("/api/chat/agent")
+def chat_agent_direct(msg: DirectAgentChat):
+    """Direct chat with a specific agent - for click-to-agent feature"""
+    if msg.agent not in AGENT_NAMES:
+        raise HTTPException(400, f"Unknown agent: {msg.agent}. Available: {AGENT_NAMES}")
+    log_message(msg.student_id, "user", msg.message)
+    role_info = AGENT_ROLES.get(msg.agent, {"name": msg.agent.replace('_', ' ').title(), "name_zh": "", "icon": "", "color": "#666"})
+    response_text = run_agent(msg.agent, msg.student_id, msg.message)
+    response_obj = {
+        "agent": msg.agent,
+        "agentName": role_info["name"],
+        "agentNameZh": role_info["name_zh"],
+        "icon": role_info["icon"],
+        "color": role_info["color"],
+        "content": response_text
+    }
+    return {
+        "student_id": msg.student_id,
+        "plan": {"agents": [msg.agent], "sequence": "direct", "reason": "user selected agent"},
+        "responses": [response_obj],
+        "agent": msg.agent,
+        "response": response_text
+    }
+
+@app.get("/api/agents/roles")
+def get_agent_roles():
+    """Return agent roles info for frontend agent selector"""
+    return AGENT_ROLES
