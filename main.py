@@ -127,8 +127,6 @@ def call_llm(prompt: str, system_instruction: str = "") -> str:
             )
             return response.text
         except Exception as e:
-                        last_error = e
-                print(f"LLM Error ({model_name}): {e}")
             continue
     return "⚠️ 抱歉，AI 顧問暫時無法回應。請稍後再試或聯絡管理員。"
 def update_agent_state(agent_name: str, student_id: str, last_action: str, extra_state: dict = None):
